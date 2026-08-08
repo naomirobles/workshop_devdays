@@ -5,5 +5,5 @@ dependency_layer = false
 latest_infra_sync_time = 1786211823.940015
 
 [resource_sync_states."ZipFunctionSyncFlow:AgentFunction"]
-hash = "5a992bee7722fd1ea9156ccc7816e30afa37896193c0f7c2ca0eeb88116f1ba6"
-sync_time = 1786212052.718518
+hash = "8cf4e2efba10b0e2ce6fd3436d213fdbf3c762c9bfe7e7758be5e0ce02dc2af4"
+sync_time = 1786220016.517684

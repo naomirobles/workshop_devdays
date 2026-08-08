@@ -117,13 +117,84 @@ const checkFutureStock = tool({
   },
 });
 
+const COORDS = {
+  "cedis amazon area metropolitana": { lat: 19.7128, lon: -99.2258 },
+  "cedis cdmx":                      { lat: 19.7128, lon: -99.2258 },
+  "cedis edomex":                    { lat: 19.7128, lon: -99.2258 },
+  "cedis amazon nuevo leon":         { lat: 25.7785, lon: -100.1858 },
+  "cedis monterrey":                 { lat: 25.7785, lon: -100.1858 },
+};
+
+function resolveCoords(text) {
+  const key = text.trim().toLowerCase();
+  for (const [k, v] of Object.entries(COORDS)) {
+    if (key.includes(k) || k.includes(key)) return v;
+  }
+  return null;
+}
+
+const getRoutes = tool({
+  name: "get_routes",
+  description:
+    "Given an origin and a destination (both must be known CEDIS locations), " +
+    "returns up to 3 driving route options with distance (km), estimated duration (hours), " +
+    "and the route geometry coordinates. Use this when the user asks for routes between two points.",
+  inputSchema: z.object({
+    origin:      z.string().describe("Origin location, e.g. 'CEDIS Amazon área metropolitana'"),
+    destination: z.string().describe("Destination location, e.g. 'CEDIS Amazon Nuevo León'"),
+  }),
+  callback: async ({ origin, destination }) => {
+    const from = resolveCoords(origin);
+    const to   = resolveCoords(destination);
+    if (!from) return `No reconozco el origen "${origin}". Por favor aclara el punto de partida.`;
+    if (!to)   return `No reconozco el destino "${destination}". Por favor aclara el punto de llegada.`;
+
+    const url =
+      `https://router.project-osrm.org/route/v1/driving/` +
+      `${from.lon},${from.lat};${to.lon},${to.lat}` +
+      `?alternatives=true&overview=full&geometries=geojson`;
+
+    let res;
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 10000);
+      res = await fetch(url, { signal: controller.signal });
+      clearTimeout(timer);
+    } catch (err) {
+      return `Error al conectar con el servicio de rutas: ${err.message}`;
+    }
+
+    if (!res.ok) return `El servicio de rutas respondió con error ${res.status}.`;
+
+    const data = await res.json();
+    if (!data.routes || data.routes.length === 0) return "No se encontraron rutas entre esos puntos.";
+
+    const routes = data.routes.slice(0, 3).map((r, i) => ({
+      label:       `Ruta ${i + 1}`,
+      distance_km: Math.round((r.distance / 1000) * 10) / 10,
+      duration_hr: Math.round((r.duration / 3600) * 10) / 10,
+      coordinates: r.geometry.coordinates,
+    }));
+
+    return JSON.stringify(routes);
+  },
+});
+
 const SYSTEM_PROMPT =
-  "You are a shop assistant for 'Nube', an online store, and a die-hard rock music fan. " +
-  "Use your tools to answer questions about products and shipping. " +
-  "Speak with the energy and passion of a rock fan: reference bands, albums, guitar riffs, " +
-  "stage energy, and rock culture naturally in your replies. Use rock slang and analogies " +
-  "(e.g. compare fast shipping to a Metallica drum solo, describe a product like it's a legendary guitar). " +
-  "Keep answers helpful and concise but always with that rock attitude — loud, enthusiastic, no-nonsense.";
+  "Eres un asistente especializado en logística y geodatos para la tienda 'Nube'. " +
+  "Hablas con la precisión y autoridad de un experto en cadena de suministro y análisis espacial: " +
+  "usas términos técnicos como tiempo de tránsito, throughput, nodo de distribución, cobertura geográfica, " +
+  "coordenadas, polígonos de cobertura y optimización de rutas de forma natural y fluida. " +
+  "Eres directo, estructurado y orientado a datos — cuando das información, la acompañas de cifras y contexto operativo. " +
+  "\n\n" +
+  "Cuando el usuario pregunte por una ruta entre dos puntos (ej. 'quiero ir del CEDIS del área " +
+  "metropolitana al de Nuevo León'), llama a la tool get_routes con esos dos puntos. " +
+  "Responde en español listando cada opción así:\n" +
+  "  Ruta 1 — Xkm · Yh de tránsito estimado\n" +
+  "  Ruta 2 — ...\n" +
+  "Comenta brevemente las diferencias operativas entre rutas (distancia, tiempo). " +
+  "Al final de la respuesta de rutas, aclara siempre: " +
+  "'En la siguiente iteración cruzaremos estas rutas con datos de incidentes para recomendarte la ruta de menor riesgo operativo.'";
 
 export async function* answerWith(message, sessionId) {
   const history = await loadHistory(sessionId);
@@ -131,7 +202,7 @@ export async function* answerWith(message, sessionId) {
     model,
     systemPrompt: SYSTEM_PROMPT,
     messages: history,
-    tools: [lookUpProduct, checkShipping, checkStock, checkFutureStock],
+    tools: [lookUpProduct, checkShipping, checkStock, checkFutureStock, getRoutes],
     printer: false,
   });
 
