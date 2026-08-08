@@ -118,20 +118,9 @@ const checkFutureStock = tool({
 });
 
 const COORDS = {
-  "cedis amazon area metropolitana": { lat: 19.7128, lon: -99.2258 },
-  "cedis cdmx":                      { lat: 19.7128, lon: -99.2258 },
-  "cedis edomex":                    { lat: 19.7128, lon: -99.2258 },
-  "cedis amazon nuevo leon":         { lat: 25.7785, lon: -100.1858 },
-  "cedis monterrey":                 { lat: 25.7785, lon: -100.1858 },
+  "cdmx":       { lat: 19.7128, lon: -99.2258 },
+  "monterrey":  { lat: 25.7785, lon: -100.1858 },
 };
-
-function resolveCoords(text) {
-  const key = text.trim().toLowerCase();
-  for (const [k, v] of Object.entries(COORDS)) {
-    if (key.includes(k) || k.includes(key)) return v;
-  }
-  return null;
-}
 
 const getRoutes = tool({
   name: "get_routes",
@@ -140,14 +129,12 @@ const getRoutes = tool({
     "returns up to 3 driving route options with distance (km), estimated duration (hours), " +
     "and the route geometry coordinates. Use this when the user asks for routes between two points.",
   inputSchema: z.object({
-    origin:      z.string().describe("Origin location, e.g. 'CEDIS Amazon área metropolitana'"),
-    destination: z.string().describe("Destination location, e.g. 'CEDIS Amazon Nuevo León'"),
+    origin:      z.enum(["cdmx", "monterrey"]).describe("CEDIS de origen: 'cdmx' = CEDIS Amazon Área Metropolitana (Tepotzotlán), 'monterrey' = CEDIS Amazon Nuevo León (Apodaca)"),
+    destination: z.enum(["cdmx", "monterrey"]).describe("CEDIS de destino: 'cdmx' = CEDIS Amazon Área Metropolitana (Tepotzotlán), 'monterrey' = CEDIS Amazon Nuevo León (Apodaca)"),
   }),
   callback: async ({ origin, destination }) => {
-    const from = resolveCoords(origin);
-    const to   = resolveCoords(destination);
-    if (!from) return `No reconozco el origen "${origin}". Por favor aclara el punto de partida.`;
-    if (!to)   return `No reconozco el destino "${destination}". Por favor aclara el punto de llegada.`;
+    const from = COORDS[origin];
+    const to   = COORDS[destination];
 
     const url =
       `https://router.project-osrm.org/route/v1/driving/` +
@@ -169,11 +156,14 @@ const getRoutes = tool({
     const data = await res.json();
     if (!data.routes || data.routes.length === 0) return "No se encontraron rutas entre esos puntos.";
 
+    const mapsUrl = `https://www.google.com/maps/dir/?api=1&origin=${from.lat},${from.lon}&destination=${to.lat},${to.lon}&travelmode=driving`;
+
     const routes = data.routes.slice(0, 3).map((r, i) => ({
       label:       `Ruta ${i + 1}`,
       distance_km: Math.round((r.distance / 1000) * 10) / 10,
       duration_hr: Math.round((r.duration / 3600) * 10) / 10,
       coordinates: r.geometry.coordinates,
+      maps_url:    mapsUrl,
     }));
 
     return JSON.stringify(routes);
@@ -190,8 +180,8 @@ const SYSTEM_PROMPT =
   "Cuando el usuario pregunte por una ruta entre dos puntos (ej. 'quiero ir del CEDIS del área " +
   "metropolitana al de Nuevo León'), llama a la tool get_routes con esos dos puntos. " +
   "Responde en español listando cada opción así:\n" +
-  "  Ruta 1 — Xkm · Yh de tránsito estimado\n" +
-  "  Ruta 2 — ...\n" +
+  "  **Ruta N** — Xkm · Yh de tránsito estimado · [Ver Ruta N en Google Maps](maps_url)\n" +
+  "Usa el campo maps_url de cada ruta para construir el link markdown. " +
   "Comenta brevemente las diferencias operativas entre rutas (distancia, tiempo). " +
   "Al final de la respuesta de rutas, aclara siempre: " +
   "'En la siguiente iteración cruzaremos estas rutas con datos de incidentes para recomendarte la ruta de menor riesgo operativo.'";
