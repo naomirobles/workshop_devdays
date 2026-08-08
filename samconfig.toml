@@ -1,0 +1,18 @@
+version = 0.1
+
+[default.global.parameters]
+stack_name = "nube-agent"
+resolve_s3 = true
+# AUTO_EXPAND: sam sync updates the stack through the SAM transform directly
+capabilities = "CAPABILITY_IAM CAPABILITY_AUTO_EXPAND"
+confirm_changeset = false
+
+[default.sync.parameters]
+watch = true
+# Participants run sync seconds after sam deploy — skip the redundant
+# initial CloudFormation deployment when the template hasn't changed.
+skip_deploy_sync = true
+# No auto dependency layer: publishing layers needs lambda:PublishLayerVersion,
+# which the workshop IDE role doesn't have (functions are scoped to nube-agent*).
+# Deps are small here, so syncing them with the code costs a few seconds at most.
+dependency_layer = false

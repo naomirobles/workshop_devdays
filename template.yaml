@@ -1,0 +1,109 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Nube agent — a serverless AI agent with streaming responses.
+  This file IS your architecture: one function, one API, nothing else.
+
+Resources:
+
+  # Your agent: a Lambda function that streams its answers
+  AgentFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: nube-agent
+      Handler: index.handler
+      Runtime: nodejs22.x
+      Architectures: [arm64]
+      MemorySize: 512
+      Timeout: 120
+      CodeUri: src/
+      Environment:
+        Variables:
+          PRODUCTS_TABLE: product-catalog
+          SESSIONS_TABLE: agent-sessions
+          FUTURE_PRODUCTS_TABLE: future-product-catalog
+      # Execution role is pre-created for the workshop (Bedrock + catalog read).
+      Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/nube-agent-execution-role"
+
+  # The front door: a REST API that streams your agent's response
+  Api:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: nube-agent-api
+
+  ChatResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref Api
+      ParentId: !GetAtt Api.RootResourceId
+      PathPart: chat
+
+  # POST /chat — streams the agent's answer chunk by chunk
+  ChatMethod:
+    Type: AWS::ApiGateway::Method
+    # checkov:skip=CKV_AWS_59: Public by design — this is a browser chat demo in a
+    # short-lived workshop account. Auth would break the "open the URL and chat"
+    # flow that the workshop teaches, and the account is torn down after the event.
+    Properties:
+      RestApiId: !Ref Api
+      ResourceId: !Ref ChatResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        ResponseTransferMode: STREAM
+        TimeoutInMillis: 29000
+        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2021-11-15/functions/${AgentFunction.Arn}/response-streaming-invocations
+
+  # GET / — serves the chat page
+  RootMethod:
+    Type: AWS::ApiGateway::Method
+    # checkov:skip=CKV_AWS_59: Public by design — serves the chat HTML page itself,
+    # which must be reachable without auth in this short-lived workshop account.
+    Properties:
+      RestApiId: !Ref Api
+      ResourceId: !GetAtt Api.RootResourceId
+      HttpMethod: GET
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        ResponseTransferMode: STREAM
+        TimeoutInMillis: 29000
+        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2021-11-15/functions/${AgentFunction.Arn}/response-streaming-invocations
+
+  Deployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn: [ChatMethod, RootMethod]
+    Properties:
+      RestApiId: !Ref Api
+
+  AccessLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/apigateway/nube-agent
+      RetentionInDays: 7
+
+  Stage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      RestApiId: !Ref Api
+      DeploymentId: !Ref Deployment
+      StageName: prod
+      AccessLogSetting:
+        DestinationArn: !GetAtt AccessLogGroup.Arn
+        Format: '{"requestId":"$context.requestId","ip":"$context.identity.sourceIp","requestTime":"$context.requestTime","httpMethod":"$context.httpMethod","routeKey":"$context.resourcePath","status":"$context.status","responseLength":"$context.responseLength"}'
+
+  ApiInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt AgentFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${Api}/*
+
+Outputs:
+  ChatPage:
+    Description: Open this URL in your browser to chat with your agent
+    Value: !Sub "https://${Api}.execute-api.${AWS::Region}.amazonaws.com/prod/"
